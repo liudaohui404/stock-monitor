@@ -1,5 +1,5 @@
 {
-  "name": "stock-calculator",
+  "name": "stock-monitor",
   "version": "1.0.0",
   "main": "index.js",
   "license": "MIT",
@@ -15,7 +15,7 @@
     "yargs": "^17.7.2"
   },
   "bin": {
-    "stock-calc": "./index.js"
+    "stock-monitor": "./index.js"
   },
   "scripts": {
     "start": "node index.js"
