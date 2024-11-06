@@ -20,3 +20,6 @@ A command-line tool for monitoring Chinese stock portfolio performance using TuS
 ## Installation
 
 1. Clone the repository:
+2. Run npm install
+3. If on MacOS run chmod +x index.js first, then run npm link
+4. Now ypu can try it with `stock-monitor --help `
