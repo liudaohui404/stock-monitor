@@ -4,14 +4,16 @@ import axios from "axios";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import path from "path";
-import { fileURLToPath } from "url";
 import fs from "fs/promises";
 import os from "os";
-import { Table } from "console-table-printer";
+// import { Table } from "console-table-printer";
 import ora from "ora";
 import chalk from "chalk";
 import clear from "clear";
 import { format } from "date-fns";
+import boxen from 'boxen';
+import Table from 'cli-table3';
+import gradient from 'gradient-string';
 
 class StockMonitor {
   constructor() {
@@ -19,13 +21,7 @@ class StockMonitor {
     this.configFile = path.join(this.configDir, "config.json");
     this.portfolioFile = path.join(this.configDir, "portfolio.json");
     this.lastPrices = new Map();
-    this.apiClient = axios.create({
-      baseURL: "http://api.tushare.pro",
-      timeout: 10000,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    this.lastTotalReturn = null;
   }
 
   async initialize() {
@@ -70,12 +66,15 @@ class StockMonitor {
   }
 
   formatStockCode(symbol) {
-    // Format: 600000 -> 600000.SH, 000001 -> 000001.SZ
-    if (symbol.includes(".")) return symbol;
+    // Format for Tencent API: 600000 -> sh600000, 000001 -> sz000001
+    if (symbol.includes(".")) {
+      const [code, market] = symbol.split(".");
+      return (market.toLowerCase() + code);
+    }
     if (symbol.startsWith("6")) {
-      return `${symbol}.SH`;
+      return `sh${symbol}`;
     } else if (symbol.startsWith("0") || symbol.startsWith("3")) {
-      return `${symbol}.SZ`;
+      return `sz${symbol}`;
     }
     return symbol;
   }
@@ -86,44 +85,25 @@ class StockMonitor {
 
   async getStockData(symbol) {
     try {
-      // 在獲取股票數據前重新加載配置
       await this.loadPortfolio();
-      
       const formattedSymbol = this.formatStockCode(symbol);
-      const response = await this.apiClient.post("/", {
-        api_name: "daily",
-        token: this.config.apiKey,
-        params: {
-          ts_code: formattedSymbol,
-          trade_date: this.getCurrentDate(),
-        },
-        fields:
-          "ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount",
-      });
-
-      if (response.data?.data?.items?.[0]) {
-        const [
-          ts_code,
-          trade_date,
-          open,
-          high,
-          low,
-          close,
-          pre_close,
-          change,
-          pct_chg,
-        ] = response.data.data.items[0];
-
+      const response = await axios.get(`https://qt.gtimg.cn/q=${formattedSymbol}`);
+      
+      if (response.data) {
+        // Parse Tencent API response format
+        // v_sh600000="1~浦发银行~600000~19.200~19.160~19.200~262258~130768~131490~19.190~98~19.180~404~19.170~236~19.160~456~19.150~351~19.200~518~19.210~454~19.220~194~19.230~122~19.240~276~~20230915155914~-0.040~-0.21~19.340~19.020~19.160/262258/502932531~262258~50293~0.83~18.39~~19.340~19.020~1.67~1055.57~1055.57~0.72~20.90~17.24~0.91~-42~19.199~19.199~19.199~6.37~6.37~-10.87~19.160~0.00~0.00~~~1.67~50293.25~0.00~0~0~0.00~0~0~0.83~0~GP-A~81~";
+        const data = response.data.split('~');
+        
         return {
-          symbol: ts_code,
-          date: trade_date,
-          open,
-          high,
-          low,
-          close,
-          preClose: pre_close,
-          change,
-          changePercent: pct_chg,
+          symbol: formattedSymbol,
+          date: format(new Date(), 'yyyyMMdd'),
+          open: parseFloat(data[5]),
+          high: parseFloat(data[33]),
+          low: parseFloat(data[34]),
+          close: parseFloat(data[3]),
+          preClose: parseFloat(data[4]),
+          change: parseFloat(data[31]),
+          changePercent: parseFloat(data[32])
         };
       }
       throw new Error("No data available");
@@ -133,12 +113,12 @@ class StockMonitor {
     }
   }
 
-  async addPosition(symbol, shares, purchasePrice, name = '') {
+  async addPosition(symbol, shares, purchasePrice, name = "") {
     const formattedSymbol = this.formatStockCode(symbol);
     const existingPosition = this.portfolio.find(
       (p) => p.symbol === formattedSymbol
     );
-
+    let position;
     if (existingPosition) {
       // 計算新的總成本和總股數
       const totalOldCost =
@@ -159,9 +139,9 @@ class StockMonitor {
       }
     } else {
       // 添加新持倉
-      const position = {
+      position = {
         symbol: formattedSymbol,
-        name,  // 增加名稱字段
+        name, // 增加名稱字段
         shares,
         purchasePrice,
         dateAdded: new Date().toISOString(),
@@ -174,6 +154,13 @@ class StockMonitor {
   }
 
   async removePosition(symbol) {
+    const position = this.portfolio.find(
+      (p) => p.name === symbol || p.symbol === symbol
+    );
+    if (!position) {
+      console.error("Position not found");
+      return;
+    }
     const formattedSymbol = this.formatStockCode(symbol);
     this.portfolio = this.portfolio.filter((p) => p.symbol !== formattedSymbol);
     await this.savePortfolio();
@@ -198,11 +185,11 @@ class StockMonitor {
 
         results.push({
           symbol: position.symbol,
-          name: position.name || '',  // 增加名稱字段
+          name: position.name || "", // 增加名稱字段
           shares: position.shares,
           purchasePrice: position.purchasePrice.toFixed(2),
           currentPrice: currentPrice.toFixed(2),
-          todayChange: `${data.changePercent.toFixed(2)}%`,  // 添加今日漲跌幅
+          todayChange: `${data.changePercent.toFixed(2)}%`, // 添加今日漲跌幅
           value: value.toFixed(2),
           profit: profit.toFixed(2),
           return: `${returnPct.toFixed(2)}%`,
@@ -235,67 +222,88 @@ class StockMonitor {
         lastUpdateTime = now;
 
         clear();
-        spinner.text = `Monitoring stocks... (Update #${++updateCount})`;
-
         const result = await this.calculatePortfolio();
         spinner.stop();
 
-        console.log(
-          chalk.cyan(`Last update: ${new Date().toLocaleString()}\n`)
-        );
+        // Create header
+        console.log(boxen(
+          gradient.rainbow(`Stock Portfolio Monitor - Update #${updateCount}`),
+          {
+            padding: 1,
+            margin: 1,
+            borderStyle: 'double',
+            textAlignment: 'center'
+          }
+        ));
 
+        // Create main table
         const table = new Table({
-          columns: [
-            { name: "symbol", alignment: "left" },
-            { name: "name", title: "Name", alignment: "left" },  // 增加名稱列
-            { name: "shares", alignment: "right" },
-            { name: "purchasePrice", title: "Buy Price", alignment: "right" },
-            { name: "currentPrice", title: "Current", alignment: "right" },
-            { name: "todayChange", title: "Today%", alignment: "right" },  // 新增今日漲跌列
-            { name: "value", alignment: "right" },
-            { name: "profit", alignment: "right" },
-            { name: "return", title: "Total%", alignment: "right" },
-          ],
+          head: ['Symbol', 'Name', 'Shares', 'Buy Price', 'Current', 'Today%', 'Value', 'Profit', 'Total%'].map(h => chalk.bold.white(h)),
+          chars: {
+            'top': '═', 'top-mid': '╤', 'top-left': '╔', 'top-right': '╗',
+            'bottom': '═', 'bottom-mid': '╧', 'bottom-left': '╚', 'bottom-right': '╝',
+            'left': '║', 'left-mid': '╟', 'right': '║', 'right-mid': '╢',
+            'mid': '─', 'mid-mid': '┼', 'middle': '│'
+          },
+          style: {
+            head: [], 
+            border: []
+          }
         });
 
+        // Add position rows
         result.positions.forEach((position) => {
-          const row = { ...position };
-          // 為今日漲跌幅添加顏色
           const todayChangeValue = parseFloat(position.todayChange);
-          row.todayChange = todayChangeValue >= 0
-            ? chalk.green(position.todayChange)
-            : chalk.red(position.todayChange);
-          // 為總收益率添加顏色
           const returnValue = parseFloat(position.return);
-          row.return = returnValue >= 0
-            ? chalk.green(position.return)
-            : chalk.red(position.return);
-          table.addRow(row);
+          
+          table.push([
+            position.symbol,
+            position.name || '',
+            position.shares.toString(),
+            position.purchasePrice,
+            position.currentPrice,
+            todayChangeValue >= 0 ? chalk.red(position.todayChange) : chalk.green(position.todayChange),
+            `¥${position.value}`,
+            parseFloat(position.profit) >= 0 ? chalk.red(`¥${position.profit}`) : chalk.green(`¥${position.profit}`),
+            returnValue >= 0 ? chalk.red(position.return) : chalk.green(position.return)
+          ]);
         });
 
-        table.printTable();
+        // Add summary row with special formatting
+        const currentTotalReturn = parseFloat(result.summary.totalReturn);
+        let returnChange = '';
+        if (this.lastTotalReturn !== null) {
+          const change = currentTotalReturn - this.lastTotalReturn;
+          returnChange = ` (${change >= 0 ? '↑' : '↓'} ${Math.abs(change).toFixed(2)}%)`;
+        }
+        this.lastTotalReturn = currentTotalReturn;
 
-        console.log(chalk.bold("\nPortfolio Summary:"));
-        console.log(
-          `Total Value: ${chalk.yellow("¥" + result.summary.totalValue)}`
-        );
-        console.log(
-          `Total Cost: ${chalk.yellow("¥" + result.summary.totalCost)}`
-        );
-        console.log(
-          `Total Profit: ${
-            parseFloat(result.summary.totalProfit) >= 0
-              ? chalk.green("¥" + result.summary.totalProfit)
-              : chalk.red("¥" + result.summary.totalProfit)
-          }`
-        );
-        console.log(
-          `Total Return: ${
-            parseFloat(result.summary.totalReturn) >= 0
-              ? chalk.green(result.summary.totalReturn + "%")
-              : chalk.red(result.summary.totalReturn + "%")
-          }`
-        );
+        table.push([
+          chalk.bold('TOTAL'),
+          '', '', '', '',
+          '',
+          chalk.yellow(`¥${result.summary.totalValue}`),
+          parseFloat(result.summary.totalProfit) >= 0 
+            ? chalk.red(`¥${result.summary.totalProfit}`)
+            : chalk.green(`¥${result.summary.totalProfit}`),
+          currentTotalReturn >= 0
+            ? chalk.red(result.summary.totalReturn + "%" + returnChange)
+            : chalk.green(result.summary.totalReturn + "%" + returnChange)
+        ]);
+
+        console.log(table.toString());
+
+        // Add market status box
+        console.log(boxen(
+          `Last Update: ${new Date().toLocaleString()}`,
+          {
+            padding: 1,
+            margin: 1,
+            borderStyle: 'round',
+            borderColor: 'cyan',
+            textAlignment: 'center'
+          }
+        ));
 
         spinner.start();
       } catch (error) {
@@ -320,12 +328,22 @@ class StockMonitor {
     result.positions.forEach((r) => table.addRow(r));
     table.printTable();
   }
+
+  async getPortfolioSymbols() {
+    await this.loadPortfolio();
+    return this.portfolio.map((position) => ({
+      name: `${position.symbol} (${position.name || "No Name"})`,
+      value: position.symbol,
+    }));
+  }
 }
 
 // CLI Setup
 async function setupCLI() {
   const monitor = new StockMonitor();
   await monitor.initialize();
+
+  const symbols = await monitor.getPortfolioSymbols();
 
   yargs(hideBin(process.argv))
     .command(
@@ -350,7 +368,8 @@ async function setupCLI() {
       {
         symbol: {
           alias: "s",
-          describe: "Stock symbol (e.g., 600000 for Shanghai, 000001 for Shenzhen)",
+          describe:
+            "Stock symbol (e.g., 600000 for Shanghai, 000001 for Shenzhen)",
           type: "string",
           demandOption: true,
         },
@@ -366,15 +385,21 @@ async function setupCLI() {
           type: "number",
           demandOption: true,
         },
-        name: {  // 增加名稱參數
+        name: {
+          // 增加名稱參數
           alias: "t",
           describe: "Stock name (optional)",
           type: "string",
-          default: '',
+          default: "",
         },
       },
       async (argv) => {
-        await monitor.addPosition(argv.symbol, argv.shares, argv.price, argv.name);
+        await monitor.addPosition(
+          argv.symbol,
+          argv.shares,
+          argv.price,
+          argv.name
+        );
         console.log("Position added successfully");
       }
     )
@@ -387,6 +412,7 @@ async function setupCLI() {
           describe: "Stock symbol to remove",
           type: "string",
           demandOption: true,
+          choices: symbols, // Use the symbols for tab completion
         },
       },
       async (argv) => {
@@ -412,7 +438,7 @@ async function setupCLI() {
     .command("view", "View portfolio", {}, async () => {
       await monitor.displayPortfolio();
     })
-    .completion()  // 啟用 yargs 內建的自動補全功能
+    .completion() // 啟用 yargs 內建的自動補全功能
     .help()
     .alias("help", "h")
     .parse();
