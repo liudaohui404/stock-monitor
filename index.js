@@ -324,9 +324,28 @@ class StockMonitor {
 
   async displayPortfolio() {
     const result = await this.calculatePortfolio();
-    const table = new Table();
-    result.positions.forEach((r) => table.addRow(r));
-    table.printTable();
+    const cliTable = new Table({
+      head: ['Symbol', 'Name', 'Shares', 'Buy Price', 'Current', 'Today%', 'Value', 'Profit', 'Total%'],
+    });
+
+    result.positions.forEach((position) => {
+      const todayChangeValue = parseFloat(position.todayChange);
+      const returnValue = parseFloat(position.return);
+
+      cliTable.push([
+      position.symbol,
+      position.name || '',
+      position.shares.toString(),
+      position.purchasePrice,
+      position.currentPrice,
+      todayChangeValue >= 0 ? chalk.red(position.todayChange) : chalk.green(position.todayChange),
+      `¥${position.value}`,
+      parseFloat(position.profit) >= 0 ? chalk.red(`¥${position.profit}`) : chalk.green(`¥${position.profit}`),
+      returnValue >= 0 ? chalk.red(position.return) : chalk.green(position.return)
+      ]);
+    });
+
+    console.log(cliTable.toString());
   }
 
   async getPortfolioSymbols() {

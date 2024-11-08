@@ -14,7 +14,6 @@ A command-line tool for monitoring Chinese stock portfolio performance using TuS
 ## Prerequisites
 
 - Node.js (v14 or higher)
-- TuShare API token (register at https://tushare.pro)
 - npm or yarn
 
 ## Installation
